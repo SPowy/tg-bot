@@ -6,6 +6,7 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode, ChatType
+from aiogram.client.default import DefaultBotProperties
 from flask import Flask
 from threading import Thread
 import requests
@@ -18,7 +19,7 @@ if not BOT_TOKEN:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=BOT_TOKEN, default=types.BotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 app = Flask(__name__)
 
@@ -111,7 +112,6 @@ async def on_bot_added(update: types.ChatMemberUpdated):
     try:
         if update.new_chat_member.status == "member":
             chat_id = update.chat.id
-            chat_title = update.chat.title or "группа"
             
             message = (
                 f"👋 Привет! Я <b>Эльза Абдрахманова</b>!\n\n"
