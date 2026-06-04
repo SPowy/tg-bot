@@ -2,11 +2,10 @@ import asyncio
 import logging
 import os
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode, ChatType
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from flask import Flask
 from threading import Thread
 import requests
@@ -27,13 +26,19 @@ BIRTHDAYS_FILE = "birthdays.json"
 
 def load_birthdays():
     if os.path.exists(BIRTHDAYS_FILE):
-        with open(BIRTHDAYS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(BIRTHDAYS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return {}
     return {}
 
 def save_birthdays(data):
-    with open(BIRTHDAYS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    try:
+        with open(BIRTHDAYS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Save error: {e}")
 
 birthdays = load_birthdays()
 
@@ -42,7 +47,10 @@ def home():
     return "OK", 200
 
 def flask_run():
-    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    try:
+        app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    except:
+        pass
 
 Thread(target=flask_run, daemon=True).start()
 
@@ -97,37 +105,78 @@ def format_birthdays_list(group_id):
     
     return "\n".join(lines)
 
+@dp.my_chat_member()
+async def on_bot_added(update: types.ChatMemberUpdated):
+    """Срабатывает когда бота добавили в группу"""
+    try:
+        if update.new_chat_member.status == "member":
+            chat_id = update.chat.id
+            chat_title = update.chat.title or "группа"
+            
+            message = (
+                f"👋 Привет! Я <b>Эльза Абдрахманова</b>!\n\n"
+                f"Я помогаю отслеживать дни рождения в группе.\n\n"
+                f"<b>Мои команды:</b>\n"
+                f"/add_birthday <имя> <дата> - добавить день рождения\n"
+                f"Пример: /add_birthday Иван 15.03\n\n"
+                f"/birthdays - показать все дни рождения\n\n"
+                f"/remove_birthday <имя> - удалить день рождения\n\n"
+                f"Я буду напоминать о днях рождения каждый день в 1:00 ночи! 🎂"
+            )
+            
+            await bot.send_message(chat_id, message)
+            logger.info(f"Bot added to group {chat_id}")
+    except Exception as e:
+        logger.error(f"Error on_bot_added: {e}")
+
 @dp.message(CommandStart())
 async def start(msg: types.Message):
-    if msg.chat.type == ChatType.PRIVATE:
-        await msg.answer(
-            "👋 Привет! Я <b>Эльза Абдрахманова</b>\n\n"
-            "Я помогаю отслеживать дни рождения в группе!\n\n"
-            "<b>Команды:</b>\n"
-            "/add_birthday <имя> <дата> - добавить день рождения (формат: 01.01)\n"
-            "/birthdays - показать все дни рождения\n"
-            "/remove_birthday <имя> - удалить день рождения\n\n"
-            "Добавьте меня в группу и я буду напоминать о днях рождения каждый день в 1:00 ночи!"
-        )
-    else:
-        await msg.answer(
-            "👋 Привет! Я <b>Эльза Абдрахманова</b>!\n\n"
-            "Я буду напоминать вам о днях рождения каждый день в 1:00 ночи 🎂"
-        )
+    try:
+        if msg.chat.type == ChatType.PRIVATE:
+            message = (
+                "👋 Привет! Я <b>Эльза Абдрахманова</b>\n\n"
+                "Я помогаю отслеживать дни рождения в группе!\n\n"
+                "<b>Команды:</b>\n"
+                "/add_birthday <имя> <дата> - добавить день рождения (формат: 01.01)\n"
+                "/birthdays - показать все дни рождения\n"
+                "/remove_birthday <имя> - удалить день рождения\n\n"
+                "Добавьте меня в группу и я буду напоминать о днях рождения каждый день в 1:00 ночи!"
+            )
+            await msg.answer(message)
+        else:
+            message = (
+                "👋 Привет! Я <b>Эльза Абдрахманова</b>!\n\n"
+                "Я буду напоминать вам о днях рождения каждый день в 1:00 ночи 🎂\n\n"
+                "Используйте /add_birthday, /birthdays, /remove_birthday"
+            )
+            await msg.answer(message)
+    except Exception as e:
+        logger.error(f"Start error: {e}")
 
 @dp.message(Command("add_birthday"))
 async def add_birthday(msg: types.Message):
     try:
         parts = msg.text.split(maxsplit=2)
         if len(parts) < 3:
-            await msg.answer("Использование: /add_birthday <имя> <дата>\nПример: /add_birthday Иван 15.03")
+            await msg.reply("❌ Использование: /add_birthday <имя> <дата>\n\nПример: /add_birthday Иван 15.03")
             return
         
         name = parts[1]
         date = parts[2]
         
-        if not date or len(date.split(".")) != 2:
-            await msg.answer("Неверный формат даты! Используйте ДД.МММ (например: 15.03)")
+        date_parts = date.split(".")
+        if len(date_parts) != 2:
+            await msg.reply("❌ Неверный формат даты! Используйте ДД.МММ (например: 15.03)")
+            return
+        
+        try:
+            day = int(date_parts[0])
+            month = int(date_parts[1])
+            if day < 1 or day > 31 or month < 1 or month > 12:
+                await msg.reply("❌ Неверная дата! День: 1-31, месяц: 1-12")
+                return
+        except:
+            await msg.reply("❌ Неверный формат даты!")
             return
         
         group_id = str(msg.chat.id)
@@ -137,27 +186,29 @@ async def add_birthday(msg: types.Message):
         birthdays[group_id][name] = date
         save_birthdays(birthdays)
         
-        await msg.answer(f"✅ День рождения <b>{name}</b> ({date}) добавлен!")
+        await msg.reply(f"✅ День рождения <b>{name}</b> ({date}) добавлен!")
+        logger.info(f"Added birthday: {name} {date} in group {group_id}")
     except Exception as e:
-        logger.error(f"Error: {e}")
-        await msg.answer("❌ Ошибка при добавлении дня рождения")
+        logger.error(f"Add birthday error: {e}")
+        await msg.reply("❌ Ошибка при добавлении дня рождения")
 
 @dp.message(Command("birthdays"))
 async def show_birthdays(msg: types.Message):
     try:
         group_id = str(msg.chat.id)
         text = format_birthdays_list(group_id)
-        await msg.answer(text)
+        await msg.reply(text)
+        logger.info(f"Showed birthdays for group {group_id}")
     except Exception as e:
-        logger.error(f"Error: {e}")
-        await msg.answer("❌ Ошибка")
+        logger.error(f"Show birthdays error: {e}")
+        await msg.reply("❌ Ошибка")
 
 @dp.message(Command("remove_birthday"))
 async def remove_birthday(msg: types.Message):
     try:
         parts = msg.text.split(maxsplit=1)
         if len(parts) < 2:
-            await msg.answer("Использование: /remove_birthday <имя>")
+            await msg.reply("❌ Использование: /remove_birthday <имя>")
             return
         
         name = parts[1]
@@ -166,26 +217,40 @@ async def remove_birthday(msg: types.Message):
         if group_id in birthdays and name in birthdays[group_id]:
             del birthdays[group_id][name]
             save_birthdays(birthdays)
-            await msg.answer(f"✅ День рождения <b>{name}</b> удален")
+            await msg.reply(f"✅ День рождения <b>{name}</b> удален")
+            logger.info(f"Removed birthday: {name} from group {group_id}")
         else:
-            await msg.answer(f"❌ День рождения <b>{name}</b> не найден")
+            await msg.reply(f"❌ День рождения <b>{name}</b> не найден")
     except Exception as e:
-        logger.error(f"Error: {e}")
-        await msg.answer("❌ Ошибка")
+        logger.error(f"Remove birthday error: {e}")
+        await msg.reply("❌ Ошибка")
 
 @dp.message()
-async def handle(msg: types.Message):
-    await msg.answer("Используйте команды: /add_birthday, /birthdays, /remove_birthday")
+async def handle_any_message(msg: types.Message):
+    try:
+        await msg.reply(
+            "Я не понимаю эту команду 😕\n\n"
+            "Используйте:\n"
+            "/add_birthday <имя> <дата> - добавить день рождения\n"
+            "/birthdays - показать все дни рождения\n"
+            "/remove_birthday <имя> - удалить день рождения"
+        )
+    except Exception as e:
+        logger.error(f"Handle message error: {e}")
 
 async def daily_reminder():
+    """Отправляет напоминание каждый день в 1:00"""
     while True:
         try:
             now = datetime.now()
             if now.hour == 1 and now.minute == 0:
-                for group_id in birthdays.keys():
+                logger.info("Sending daily reminders...")
+                for group_id in list(birthdays.keys()):
                     try:
                         text = format_birthdays_list(int(group_id))
-                        await bot.send_message(int(group_id), f"🌙 <b>Напоминание о днях рождения:</b>\n\n{text}")
+                        message = f"🌙 <b>Напоминание о днях рождения:</b>\n\n{text}"
+                        await bot.send_message(int(group_id), message)
+                        logger.info(f"Reminder sent to {group_id}")
                     except Exception as e:
                         logger.error(f"Failed to send reminder to {group_id}: {e}")
                 
@@ -198,11 +263,11 @@ async def daily_reminder():
 
 async def main():
     try:
-        logger.info("Bot starting...")
+        logger.info("🤖 Bot starting...")
         
         asyncio.create_task(daily_reminder())
         
-        logger.info("Bot running!")
+        logger.info("✅ Bot running!")
         await dp.start_polling(bot)
     except Exception as e:
         logger.error(f"Fatal: {e}")
