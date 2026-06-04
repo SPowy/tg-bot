@@ -6,6 +6,7 @@ import sys
 import json
 import threading
 import re
+import time
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
@@ -13,6 +14,7 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from dotenv import load_dotenv
+from flask import Flask
 
 load_dotenv()
 
@@ -33,7 +35,6 @@ dp = Dispatcher()
 
 BIRTHDAYS_FILE = "birthdays.json"
 
-# ─── Данные ВСЕГДА в памяти, файл только для персистентности ────────────────
 def load_data() -> dict:
     try:
         if os.path.exists(BIRTHDAYS_FILE):
@@ -50,8 +51,8 @@ def save_data():
     except Exception as e:
         logger.error(f"Ошибка сохранения: {e}")
 
-DATA: dict = load_data()  # Всё в памяти
-pending: dict = {}  # chat_id -> "add" | "remove"
+DATA: dict = load_data()
+pending: dict = {}
 
 MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[
@@ -95,8 +96,6 @@ def birthdays_text(group: dict) -> str:
         else:
             lines.append(f"📅 {name} — {date}")
     return "\n".join(lines)
-
-# ─── Handlers ────────────────────────────────────────────────────────────────
 
 @dp.message(F.new_chat_members)
 async def on_bot_added(message: types.Message):
@@ -201,11 +200,9 @@ async def handle_text(message: types.Message):
                 f"❌ Имя <b>{name}</b> не найдено.\nПроверь написание (регистр важен).",
                 reply_markup=MAIN_KB,
             )
-
     else:
         await message.answer("Используй кнопки ниже 👇", reply_markup=MAIN_KB)
 
-# ─── Напоминание в 01:00 и поздравление в 00:00 ──────────────────────────────
 async def reminder_loop():
     congratulated: set = set()
     reminded: set = set()
@@ -251,7 +248,17 @@ async def reminder_loop():
             logger.error(f"reminder_loop error: {e}")
             await asyncio.sleep(60)
 
-# ─── Entry point ─────────────────────────────────────────────────────────────
+# ─── Flask keep-alive чтобы Railway не усыплял контейнер ─────────────────────
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def health():
+    return "OK", 200
+
+def run_flask():
+    port = int(os.getenv("PORT", 5000))
+    flask_app.run(host="0.0.0.0", port=port, use_reloader=False)
+
 async def main():
     logger.info("🚀 Эльза Абдрахманова запускается...")
     bot_info = await bot.get_me()
@@ -260,4 +267,5 @@ async def main():
     await dp.start_polling(bot, drop_pending_updates=True)
 
 if __name__ == "__main__":
+    threading.Thread(target=run_flask, daemon=True).start()
     asyncio.run(main())
