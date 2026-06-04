@@ -12,7 +12,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from dotenv import load_dotenv
 from flask import Flask
 
@@ -58,6 +58,7 @@ MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📅 Дни рождения")],
         [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="❌ Удалить")],
+        [KeyboardButton(text="👤 Об авторе")],
     ],
     resize_keyboard=True,
     persistent=True,
@@ -144,6 +145,19 @@ async def btn_remove(message: types.Message):
     await message.answer(
         "✏️ Напиши имя человека которого нужно удалить:",
         reply_markup=ReplyKeyboardRemove(),
+    )
+
+@dp.message(F.text == "👤 Об авторе")
+async def btn_about(message: types.Message):
+    pending.pop(message.chat.id, None)
+    inline_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🌐 Страница ВКонтакте", url="https://vk.ru/elza.abdrakhmanova")]
+    ])
+    await message.answer(
+        "👤 <b>Об авторе</b>\n\n"
+        "Этот бот создан для <b>Эльзы Абдрахмановой</b> 🎀\n\n"
+        "Нажми кнопку ниже чтобы перейти на её страницу:",
+        reply_markup=inline_kb,
     )
 
 @dp.message(F.text)
@@ -248,7 +262,6 @@ async def reminder_loop():
             logger.error(f"reminder_loop error: {e}")
             await asyncio.sleep(60)
 
-# ─── Flask keep-alive чтобы Railway не усыплял контейнер ─────────────────────
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
