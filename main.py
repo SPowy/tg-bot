@@ -107,7 +107,7 @@ async def on_bot_added(message: types.Message):
                 await message.answer(
                     "👋 Привет! Меня зовут <b>Эльза Абдрахманова</b> 🎀\n\n"
                     "Я слежу за днями рождения в этой группе и напоминаю каждую ночь в 01:00 🌙\n\n"
-                    "Используй кнопки ниже! 🎂",
+                    "Используй кнопки ниже! Для моей работы отвечай на мои сообщения выделяя их 🎂",
                     reply_markup=MAIN_KB,
                 )
                 return
@@ -118,7 +118,7 @@ async def on_bot_added(message: types.Message):
 async def cmd_start(message: types.Message):
     await message.answer(
         "👋 Привет! Меня зовут <b>Эльза Абдрахманова</b> 🎀\n\n"
-        "Я помогаю не забывать дни рождения! 🎂\n\n"
+        "Я помогаю не забывать дни рождения! Для моей работы отвечай на мои сообщения выделяя их 🎂\n\n"
         "Используй кнопки ниже:",
         reply_markup=MAIN_KB,
     )
@@ -135,7 +135,7 @@ async def btn_add(message: types.Message):
     await message.answer(
         "✏️ Напиши имя и дату в формате:\n"
         "<b>Имя ДД.ММ</b>\n\n"
-        "Пример: <code>Анна 15.07</code>",
+        "Пример: <code>Эльза 05.03</code>",
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -155,8 +155,8 @@ async def btn_about(message: types.Message):
     ])
     await message.answer(
         "👤 <b>Об авторе</b>\n\n"
-        "Этот бот создан для <b>Эльзы Абдрахмановой</b> 🎀\n\n"
-        "Нажми кнопку ниже чтобы перейти на её страницу:",
+        "Этот бот создан  <b>Эльзой Абдрахмановой</b> 🎀\n\n"
+        "Нажми кнопку ниже чтобы перейти на мою страницу:",
         reply_markup=inline_kb,
     )
 
@@ -171,7 +171,7 @@ async def handle_text(message: types.Message):
         if len(parts) != 2 or not DATE_RE.match(parts[1]):
             await message.answer(
                 "❌ Неверный формат. Используй: <b>Имя ДД.ММ</b>\n"
-                "Пример: <code>Анна 15.07</code>",
+                "Пример: <code>Эльза 05.03</code>",
                 reply_markup=MAIN_KB,
             )
             return
@@ -242,7 +242,7 @@ async def reminder_loop():
                 await asyncio.sleep(61)
                 continue
 
-            if now.hour == 1 and now.minute == 0 and day_key not in reminded:
+            if now.hour == 0 and now.minute == 0 and day_key not in reminded:
                 reminded = {day_key}
                 for chat_id, group in DATA.items():
                     try:
