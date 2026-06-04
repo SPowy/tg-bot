@@ -1,332 +1,221 @@
-#!/usr/bin/env python3
 import asyncio
 import logging
 import os
-import sys
 import json
-import time
-from datetime import datetime
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from datetime import datetime, timedelta
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
-from aiogram.enums import ParseMode
-from aiogram.client.default import DefaultBotProperties
-from dotenv import load_dotenv
+from aiogram.enums import ParseMode, ChatType
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from flask import Flask
+from threading import Thread
+import requests
+import time
 
-load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN required")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-    logger.error("BOT_TOKEN не найден!")
-    sys.exit(1)
-
-ADMIN_IDS = [6114745287, 1301888151]
-
-bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+bot = Bot(token=BOT_TOKEN, default=types.BotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
+app = Flask(__name__)
 
-SUBSCRIBERS_FILE = "subscribers.json"
 BIRTHDAYS_FILE = "birthdays.json"
 
-def load_subscribers():
-    try:
-        if os.path.exists(SUBSCRIBERS_FILE):
-            with open(SUBSCRIBERS_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return set(data.get('users', [])), data.get('last_reminder', None)
-        return set(), None
-    except Exception as e:
-        logger.error(f"Ошибка загрузки подписчиков: {e}")
-        return set(), None
-
-def save_subscribers():
-    try:
-        with open(SUBSCRIBERS_FILE, 'w', encoding='utf-8') as f:
-            json.dump({'users': list(subscribed_users), 'last_reminder': last_reminder_date}, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.error(f"Ошибка сохранения подписчиков: {e}")
-
-subscribed_users, last_reminder_date = load_subscribers()
-
 def load_birthdays():
-    try:
-        if os.path.exists(BIRTHDAYS_FILE):
-            with open(BIRTHDAYS_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        return {}
-    except Exception as e:
-        logger.error(f"Ошибка загрузки дней рождения: {e}")
-        return {}
+    if os.path.exists(BIRTHDAYS_FILE):
+        with open(BIRTHDAYS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
 def save_birthdays(data):
-    try:
-        with open(BIRTHDAYS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.error(f"Ошибка сохранения дней рождения: {e}")
+    with open(BIRTHDAYS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-birthdays_data = load_birthdays()
+birthdays = load_birthdays()
 
-def calculate_days_until_birthday(birthday_str):
-    try:
-        if len(birthday_str.split('.')) == 3:
-            birthday = datetime.strptime(birthday_str, "%d.%m.%Y")
-        else:
-            birthday = datetime.strptime(f"{birthday_str}.2000", "%d.%m.%Y")
-        now = datetime.now()
-        next_birthday = birthday.replace(year=now.year)
-        if next_birthday < now:
-            next_birthday = next_birthday.replace(year=now.year + 1)
-        if now.date() == next_birthday.date():
-            return 0, 24 - now.hour, True
-        time_until = next_birthday - now
-        return time_until.days, time_until.seconds // 3600, False
-    except Exception as e:
-        logger.error(f"Ошибка расчета дней до ДР: {e}")
-        return None, None, False
+@app.route("/")
+def home():
+    return "OK", 200
 
-keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="✅ Подписаться"), KeyboardButton(text="❌ Отписаться")],
-        [KeyboardButton(text="📊 Статус"), KeyboardButton(text="👤 Об авторе")],
-        [KeyboardButton(text="🎂 День рождения"), KeyboardButton(text="✉️ Анонимка")],
-    ],
-    resize_keyboard=True
-)
+def flask_run():
+    app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
 
-BUTTON_TEXTS = [
-    "✅ Подписаться", "❌ Отписаться", "📊 Статус",
-    "👤 Об авторе", "🥰 Чернопопый", "🎂 День рождения", "✉️ Анонимка"
-]
+Thread(target=flask_run, daemon=True).start()
 
-@dp.message(CommandStart())
-async def cmd_start(message: types.Message):
-    try:
-        await message.answer(
-            "👋 Привет! Я бот для анонимных сообщений.\n\n"
-            "🔸 Можешь подписаться на уведомления о подарках\n"
-            "🔸 Написать анонимное сообщение администратору\n"
-            "🔸 Узнать информацию об авторе\n\n"
-            "Просто выбери действие из меню ниже 👇",
-            reply_markup=keyboard
-        )
-        logger.info(f"Пользователь {message.from_user.id} запустил бота")
-    except Exception as e:
-        logger.error(f"Ошибка в cmd_start: {e}")
-
-@dp.message(lambda m: m.text == "✅ Подписаться")
-async def subscribe(message: types.Message):
-    try:
-        subscribed_users.add(message.chat.id)
-        save_subscribers()
-        await message.answer("🎉 Теперь ты будешь получать уведомления!", reply_markup=keyboard)
-    except Exception as e:
-        logger.error(f"Ошибка в subscribe: {e}")
-
-@dp.message(lambda m: m.text == "❌ Отписаться")
-async def unsubscribe(message: types.Message):
-    try:
-        subscribed_users.discard(message.chat.id)
-        save_subscribers()
-        await message.answer("❌ Ты отписался от уведомлений.", reply_markup=keyboard)
-    except Exception as e:
-        logger.error(f"Ошибка в unsubscribe: {e}")
-
-@dp.message(lambda m: m.text == "📊 Статус")
-async def status(message: types.Message):
-    try:
-        user_status = "✅ Подписан" if message.chat.id in subscribed_users else "❌ Не подписан"
-        await message.answer(f"🟢 Бот работает!\nВаш статус: {user_status}", reply_markup=keyboard)
-    except Exception as e:
-        logger.error(f"Ошибка в status: {e}")
-
-@dp.message(lambda m: m.text == "👤 Об авторе")
-async def about(message: types.Message):
-    try:
-        inline_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="💬 Написать автору", url="tg://resolve?domain=evenchee")]
-        ])
-        await message.answer("Об авторе\nДолбаеб: @evenchee", reply_markup=inline_kb)
-    except Exception as e:
-        logger.error(f"Ошибка в about: {e}")
-
-@dp.message(lambda m: m.text == "🎂 День рождения")
-async def birthday_handler(message: types.Message):
-    try:
-        user_id = str(message.from_user.id)
-        if user_id in birthdays_data:
-            birthday_str = birthdays_data[user_id]
-            days_until, hours_until, is_today = calculate_days_until_birthday(birthday_str)
-            if is_today:
-                text = f"🎉 <b>С ДНЕМ РОЖДЕНИЯ!</b> 🎂\n\nТвой день рождения: {birthday_str}"
-            elif days_until is not None:
-                time_text = f"{days_until} дней {hours_until} часов" if days_until > 1 else f"1 день {hours_until} часов" if days_until == 1 else f"менее {24-(hours_until or 0)} часов"
-                text = (
-                    f"🎂 <b>Твой день рождения</b>\n\n"
-                    f"📅 Дата: {birthday_str}\n"
-                    f"⏰ До дня рождения: <b>{time_text}</b>\n\n"
-                    f"Чтобы изменить дату, напиши новую в формате ДД.ММ.ГГГГ"
-                )
-            else:
-                text = "❌ Ошибка в формате даты. Напиши заново в формате ДД.ММ.ГГГГ"
-        else:
-            text = (
-                "🎂 <b>Система дня рождения</b>\n\n"
-                "📝 <b>Формат даты:</b>\n"
-                "• <b>ДД.ММ.ГГГГ</b> (например: 15.07.1995)\n"
-                "• <b>ДД.ММ</b> (например: 15.07)\n\n"
-                "Напиши свой день рождения следующим сообщением 👇"
-            )
-        await message.answer(text, reply_markup=keyboard)
-    except Exception as e:
-        logger.error(f"Ошибка в birthday_handler: {e}")
-
-@dp.message(lambda m: m.text == "✉️ Анонимка")
-async def ask_anonymous(message: types.Message):
-    try:
-        await message.answer("✏️ Напиши сообщение", reply_markup=keyboard)
-    except Exception as e:
-        logger.error(f"Ошибка в ask_anonymous: {e}")
-
-@dp.message(lambda m: m.from_user and m.from_user.id in ADMIN_IDS and m.text == "/stats")
-async def admin_stats(message: types.Message):
-    try:
-        await message.answer(
-            f"📊 Статистика бота:\n\n"
-            f"👥 Подписчиков: {len(subscribed_users)}\n"
-            f"🎂 Дней рождения: {len(birthdays_data)}\n"
-            f"🤖 Бот работает!"
-        )
-    except Exception as e:
-        logger.error(f"Ошибка в admin_stats: {e}")
-
-@dp.message()
-async def handle_all_messages(message: types.Message):
-    try:
-        if not message.text or not message.from_user:
-            return
-        if message.text in BUTTON_TEXTS:
-            return
-        if message.from_user.id in ADMIN_IDS:
-            return
-
-        # Проверяем дату рождения
-        if '.' in message.text:
-            parts = message.text.strip().split('.')
-            if len(parts) in [2, 3] and all(p.isdigit() for p in parts):
-                birthday_str = message.text.strip()
-                days_until, hours_until, is_today = calculate_days_until_birthday(birthday_str)
-                if days_until is not None:
-                    user_id = str(message.from_user.id)
-                    birthdays_data[user_id] = birthday_str
-                    save_birthdays(birthdays_data)
-                    if is_today:
-                        resp = f"🎉 <b>С ДНЕМ РОЖДЕНИЯ!</b>\n✅ Дата сохранена: {birthday_str}"
-                    else:
-                        time_text = f"{days_until} дней {hours_until} часов"
-                        resp = f"✅ <b>День рождения сохранен!</b>\n📅 Дата: {birthday_str}\n⏰ До дня рождения: <b>{time_text}</b>"
-                    await message.answer(resp, reply_markup=keyboard)
-                    return
-                else:
-                    await message.answer("❌ Неправильный формат даты!\n\nИспользуй: <b>ДД.ММ.ГГГГ</b> или <b>ДД.ММ</b>", reply_markup=keyboard)
-                    return
-
-        # Пересылаем анонимное сообщение админам
-        username = f"@{message.from_user.username}" if message.from_user.username else "без username"
-        user_id = message.from_user.id
-        full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
-        text = str(message.text)[:4000]
-
-        info_text = (
-            f"📩 <b>Новое анонимное сообщение:</b>\n\n"
-            f"<i>{text}</i>\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"👤 <b>От:</b> {username}\n"
-            f"🆔 <b>ID:</b> <code>{user_id}</code>\n"
-            f"📝 <b>Имя:</b> {full_name}"
-        )
-        forward_text = f"📤 <b>Анонимное сообщение:</b>\n\n{text}"
-
-        delivered = 0
-        for admin_id in ADMIN_IDS:
-            try:
-                await bot.send_message(chat_id=admin_id, text=info_text)
-                await asyncio.sleep(0.3)
-                await bot.send_message(chat_id=admin_id, text=forward_text)
-                delivered += 1
-            except Exception as e:
-                logger.error(f"Ошибка отправки админу {admin_id}: {e}")
-
-        if delivered > 0:
-            await message.answer("✅ Сообщение доставлено!", reply_markup=keyboard)
-        else:
-            await message.answer("⚠️ Сообщение принято, могут быть задержки.", reply_markup=keyboard)
-
-    except Exception as e:
-        logger.error(f"Критическая ошибка в handle_all_messages: {e}")
+def ping():
+    while True:
+        time.sleep(240)
         try:
-            await message.answer("✅ Сообщение принято!", reply_markup=keyboard)
+            requests.get("http://0.0.0.0:5000", timeout=10)
         except:
             pass
 
-async def birthday_loop():
-    """Фоновая задача для поздравлений и напоминаний"""
+Thread(target=ping, daemon=True).start()
+
+def get_days_until_birthday(date_str):
+    try:
+        birth_date = datetime.strptime(date_str, "%d.%m")
+        today = datetime.now()
+        this_year = birth_date.replace(year=today.year)
+        
+        if this_year < today:
+            this_year = birth_date.replace(year=today.year + 1)
+        
+        days = (this_year - today).days
+        return days
+    except:
+        return None
+
+def format_birthdays_list(group_id):
+    if str(group_id) not in birthdays:
+        return "Нет добавленных дней рождения"
+    
+    group_bdays = birthdays[str(group_id)]
+    if not group_bdays:
+        return "Нет добавленных дней рождения"
+    
+    lines = ["📅 <b>Дни рождения в группе:</b>\n"]
+    
+    sorted_bdays = sorted(
+        group_bdays.items(),
+        key=lambda x: get_days_until_birthday(x[1]) or 999
+    )
+    
+    for name, date in sorted_bdays:
+        days = get_days_until_birthday(date)
+        if days is not None:
+            if days == 0:
+                lines.append(f"🎉 <b>{name}</b> - <b>СЕГОДНЯ!</b> ({date})")
+            elif days == 1:
+                lines.append(f"🎂 <b>{name}</b> - завтра! ({date})")
+            else:
+                lines.append(f"📆 <b>{name}</b> - через {days} дней ({date})")
+    
+    return "\n".join(lines)
+
+@dp.message(CommandStart())
+async def start(msg: types.Message):
+    if msg.chat.type == ChatType.PRIVATE:
+        await msg.answer(
+            "👋 Привет! Я <b>Эльза Абдрахманова</b>\n\n"
+            "Я помогаю отслеживать дни рождения в группе!\n\n"
+            "<b>Команды:</b>\n"
+            "/add_birthday <имя> <дата> - добавить день рождения (формат: 01.01)\n"
+            "/birthdays - показать все дни рождения\n"
+            "/remove_birthday <имя> - удалить день рождения\n\n"
+            "Добавьте меня в группу и я буду напоминать о днях рождения каждый день в 1:00 ночи!"
+        )
+    else:
+        await msg.answer(
+            "👋 Привет! Я <b>Эльза Абдрахманова</b>!\n\n"
+            "Я буду напоминать вам о днях рождения каждый день в 1:00 ночи 🎂"
+        )
+
+@dp.message(Command("add_birthday"))
+async def add_birthday(msg: types.Message):
+    try:
+        parts = msg.text.split(maxsplit=2)
+        if len(parts) < 3:
+            await msg.answer("Использование: /add_birthday <имя> <дата>\nПример: /add_birthday Иван 15.03")
+            return
+        
+        name = parts[1]
+        date = parts[2]
+        
+        if not date or len(date.split(".")) != 2:
+            await msg.answer("Неверный формат даты! Используйте ДД.МММ (например: 15.03)")
+            return
+        
+        group_id = str(msg.chat.id)
+        if group_id not in birthdays:
+            birthdays[group_id] = {}
+        
+        birthdays[group_id][name] = date
+        save_birthdays(birthdays)
+        
+        await msg.answer(f"✅ День рождения <b>{name}</b> ({date}) добавлен!")
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        await msg.answer("❌ Ошибка при добавлении дня рождения")
+
+@dp.message(Command("birthdays"))
+async def show_birthdays(msg: types.Message):
+    try:
+        group_id = str(msg.chat.id)
+        text = format_birthdays_list(group_id)
+        await msg.answer(text)
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        await msg.answer("❌ Ошибка")
+
+@dp.message(Command("remove_birthday"))
+async def remove_birthday(msg: types.Message):
+    try:
+        parts = msg.text.split(maxsplit=1)
+        if len(parts) < 2:
+            await msg.answer("Использование: /remove_birthday <имя>")
+            return
+        
+        name = parts[1]
+        group_id = str(msg.chat.id)
+        
+        if group_id in birthdays and name in birthdays[group_id]:
+            del birthdays[group_id][name]
+            save_birthdays(birthdays)
+            await msg.answer(f"✅ День рождения <b>{name}</b> удален")
+        else:
+            await msg.answer(f"❌ День рождения <b>{name}</b> не найден")
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        await msg.answer("❌ Ошибка")
+
+@dp.message()
+async def handle(msg: types.Message):
+    await msg.answer("Используйте команды: /add_birthday, /birthdays, /remove_birthday")
+
+async def daily_reminder():
     while True:
         try:
             now = datetime.now()
-            bdays = load_birthdays()
-
-            if now.hour == 0 and now.minute == 0:
-                for uid, bday in bdays.items():
+            if now.hour == 1 and now.minute == 0:
+                for group_id in birthdays.keys():
                     try:
-                        _, _, is_today = calculate_days_until_birthday(bday)
-                        if is_today:
-                            await bot.send_message(
-                                int(uid),
-                                "🎉🎂 <b>С ДНЕМ РОЖДЕНИЯ!</b> 🎂🎉\n\nЖелаем счастья, здоровья и исполнения всех желаний! ✨",
-                                reply_markup=keyboard
-                            )
+                        text = format_birthdays_list(int(group_id))
+                        await bot.send_message(int(group_id), f"🌙 <b>Напоминание о днях рождения:</b>\n\n{text}")
                     except Exception as e:
-                        logger.error(f"Ошибка поздравления {uid}: {e}")
-                await asyncio.sleep(61)
-
-            elif now.hour == 6 and now.minute == 0:
-                for uid, bday in bdays.items():
-                    try:
-                        days, hours, is_today = calculate_days_until_birthday(bday)
-                        if not is_today and days is not None:
-                            time_text = f"{days} дней {hours} часов"
-                            await bot.send_message(
-                                int(uid),
-                                f"🎂 Доброе утро! ☀️\n\n📅 Твой день рождения: {bday}\n⏰ До праздника: <b>{time_text}</b>",
-                                reply_markup=keyboard
-                            )
-                    except Exception as e:
-                        logger.error(f"Ошибка напоминания {uid}: {e}")
-                await asyncio.sleep(61)
+                        logger.error(f"Failed to send reminder to {group_id}: {e}")
+                
+                await asyncio.sleep(60)
             else:
                 await asyncio.sleep(30)
         except Exception as e:
-            logger.error(f"Ошибка в birthday_loop: {e}")
+            logger.error(f"Reminder error: {e}")
             await asyncio.sleep(60)
 
 async def main():
-    logger.info("🚀 Бот запускается...")
-    logger.info(f"🔧 Админы: {ADMIN_IDS}")
-
-    bot_info = await bot.get_me()
-    logger.info(f"✅ Подключено: @{bot_info.username}")
-
-    asyncio.create_task(birthday_loop())
-
-    await dp.start_polling(bot, drop_pending_updates=True)
+    try:
+        logger.info("Bot starting...")
+        
+        asyncio.create_task(daily_reminder())
+        
+        logger.info("Bot running!")
+        await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"Fatal: {e}")
+        raise
+    finally:
+        await bot.session.close()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Stopped")
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        time.sleep(10)
+
