@@ -12,7 +12,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from dotenv import load_dotenv
 from flask import Flask
 
@@ -58,7 +58,6 @@ MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📅 Дни рождения")],
         [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="❌ Удалить")],
-        [KeyboardButton(text="👤 Об авторе")],
     ],
     resize_keyboard=True,
     persistent=True,
@@ -107,7 +106,7 @@ async def on_bot_added(message: types.Message):
                 await message.answer(
                     "👋 Привет! Меня зовут <b>Эльза Абдрахманова</b> 🎀\n\n"
                     "Я слежу за днями рождения в этой группе и напоминаю каждую ночь в 01:00 🌙\n\n"
-                    "Используй кнопки ниже! 🎂",
+                    "Используй кнопки ниже! Для работы бота нужно отвечать на его сообщения выделяя их  🎂",
                     reply_markup=MAIN_KB,
                 )
                 return
@@ -118,7 +117,7 @@ async def on_bot_added(message: types.Message):
 async def cmd_start(message: types.Message):
     await message.answer(
         "👋 Привет! Меня зовут <b>Эльза Абдрахманова</b> 🎀\n\n"
-        "Я помогаю не забывать дни рождения! 🎂\n\n"
+        "Я помогаю не забывать дни рождения! Для работы отвечай на мои сообщения 🎂\n\n"
         "Используй кнопки ниже:",
         reply_markup=MAIN_KB,
     )
@@ -135,7 +134,7 @@ async def btn_add(message: types.Message):
     await message.answer(
         "✏️ Напиши имя и дату в формате:\n"
         "<b>Имя ДД.ММ</b>\n\n"
-        "Пример: <code>Анна 15.07</code>",
+        "Пример: <code>Эльза 05.03</code>",
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -145,19 +144,6 @@ async def btn_remove(message: types.Message):
     await message.answer(
         "✏️ Напиши имя человека которого нужно удалить:",
         reply_markup=ReplyKeyboardRemove(),
-    )
-
-@dp.message(F.text == "👤 Об авторе")
-async def btn_about(message: types.Message):
-    pending.pop(message.chat.id, None)
-    inline_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🌐 Страница ВКонтакте", url="https://vk.ru/elza.abdrakhmanova")]
-    ])
-    await message.answer(
-        "👤 <b>Об авторе</b>\n\n"
-        "Этот бот создан для <b>Эльзы Абдрахмановой</b> 🎀\n\n"
-        "Нажми кнопку ниже чтобы перейти на её страницу:",
-        reply_markup=inline_kb,
     )
 
 @dp.message(F.text)
@@ -171,7 +157,7 @@ async def handle_text(message: types.Message):
         if len(parts) != 2 or not DATE_RE.match(parts[1]):
             await message.answer(
                 "❌ Неверный формат. Используй: <b>Имя ДД.ММ</b>\n"
-                "Пример: <code>Анна 15.07</code>",
+                "Пример: <code>Эльза 05.03</code>",
                 reply_markup=MAIN_KB,
             )
             return
@@ -262,6 +248,7 @@ async def reminder_loop():
             logger.error(f"reminder_loop error: {e}")
             await asyncio.sleep(60)
 
+# ─── Flask keep-alive чтобы Railway не усыплял контейнер ─────────────────────
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
