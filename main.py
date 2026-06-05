@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""
+Эльза Абдрахманова — Telegram-бот для отслеживания дней рождения.
+Поддерживает: добавление/удаление/просмотр ДР, ежедневные напоминания,
+гороскопы, настроения, обратный отсчёт, пожелания и многое другое.
+"""
 import asyncio
 import logging
 import os
@@ -8,6 +13,7 @@ import threading
 import re
 import random
 import unicodedata
+import time
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
@@ -22,36 +28,42 @@ from flask import Flask
 
 load_dotenv()
 
+# ─── Логирование ──────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
 
+# Подавляем лишний шум от сторонних библиотек
+logging.getLogger("aiogram").setLevel(logging.WARNING)
+logging.getLogger("aiohttp").setLevel(logging.WARNING)
+
 TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
-    logger.error("BOT_TOKEN не найден!")
+    logger.critical("BOT_TOKEN не найден в переменных окружения! Завершение.")
     sys.exit(1)
 
-ADMIN_ID = 6114745287  # твой Telegram ID
+ADMIN_ID = 6114745287  # Telegram ID администратора бота
 
+# ─── Инициализация бота ───────────────────────────────────────────────────────
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 async def notify_admin(text: str):
-    """Тихо отправляет сообщение админу, не падает при ошибке."""
+    """Тихо отправляет сообщение админу. Не бросает исключений."""
     try:
         await bot.send_message(ADMIN_ID, text, parse_mode=ParseMode.HTML)
     except Exception as e:
-        logger.error(f"Ошибка отправки админу: {e}")
+        logger.warning(f"Не удалось отправить сообщение админу: {e}")
 
 async def log_message(message: types.Message):
-    """Логирует любое сообщение пользователя и пересылает админу."""
+    """Логирует входящее сообщение в консоль и пересылает отчёт админу."""
     try:
-        user   = message.from_user
-        chat   = message.chat
-        now    = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+        user  = message.from_user
+        chat  = message.chat
+        now   = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
 
         chat_type = {
             "private":    "👤 Личка",
@@ -63,7 +75,10 @@ async def log_message(message: types.Message):
         chat_title = chat.title or "—"
         user_name  = f"{user.first_name or ''} {user.last_name or ''}".strip() or "—"
         username   = f"@{user.username}" if user.username else "нет username"
-        text       = message.text or "[не текст]"
+        msg_text   = message.text or "[не текст]"
+
+        # Краткий лог в консоль
+        logger.info(f"MSG [{chat.type}:{chat.id}] {user_name} ({user.id}): {msg_text[:80]}")
 
         report = (
             f"📨 <b>Новое сообщение</b>\n"
@@ -75,7 +90,7 @@ async def log_message(message: types.Message):
             f"👤 <b>{user_name}</b> ({username})\n"
             f"🆔 user_id: <code>{user.id}</code>\n"
             f"─────────────────\n"
-            f"💬 <b>Текст:</b> {text}"
+            f"💬 <b>Текст:</b> {msg_text}"
         )
         await notify_admin(report)
     except Exception as e:
@@ -89,20 +104,34 @@ WISHES_FILE     = "wishes.json"    # пожелания к ДР от чата
 
 # ─── Загрузка / сохранение ────────────────────────────────────────────────────
 def _load(path: str) -> dict:
+    """Загружает JSON-файл. Возвращает пустой dict при любой ошибке."""
     try:
         if os.path.exists(path):
             with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                data = json.load(f)
+                logger.info(f"Загружен файл {path} ({len(data)} записей)")
+                return data
+        else:
+            logger.info(f"Файл {path} не найден, начинаем с пустого словаря")
+    except json.JSONDecodeError as e:
+        logger.error(f"Повреждён JSON в {path}: {e} — начинаем с пустого словаря")
     except Exception as e:
         logger.error(f"Ошибка загрузки {path}: {e}")
     return {}
 
 def _save(path: str, data: dict):
+    """Атомарно сохраняет данные в JSON-файл через временный файл."""
+    tmp = path + ".tmp"
     try:
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)  # атомарная замена — защита от повреждения при сбое
     except Exception as e:
         logger.error(f"Ошибка сохранения {path}: {e}")
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 DATA:    dict = _load(BIRTHDAYS_FILE)
 MEMORY:  dict = _load(MEMORY_FILE)    # {chat_id: {offenders:{uid:count}, activity:{uid:count}, fav_week:"", fav_announced:""}}
@@ -137,7 +166,8 @@ MAIN_KB = ReplyKeyboardMarkup(
     persistent=True,
 )
 
-DATE_RE = re.compile(r"^\d{2}\.\d{2}(\.\d{4})?$")
+# Принимает ДД.ММ или ДД.ММ.ГГГГ — строгая проверка диапазонов через datetime.strptime
+DATE_RE = re.compile(r"^(0[1-9]|[12]\d|3[01])\.(0[1-9]|1[0-2])(\.\d{4})?$")
 
 # ─── Настроения ───────────────────────────────────────────────────────────────
 MOODS = ["злая", "добрая", "ленивая", "гиперактивная"]
@@ -529,8 +559,9 @@ def format_date_display(date_str: str) -> str:
     return f"{parts[0]}.{parts[1]}.{parts[2]}" if len(parts) == 3 else f"{parts[0]}.{parts[1]}"
 
 def birthdays_text(group: dict) -> str:
+    """Форматирует список дней рождения, отсортированный по близости даты."""
     if not group:
-        return "📭 Список дней рождения пуст."
+        return "📭 Список дней рождения пуст.\n\nДобавь первый с помощью кнопки ➕ Добавить!"
     entries = []
     for name, info in group.items():
         if isinstance(info, str):
@@ -541,23 +572,27 @@ def birthdays_text(group: dict) -> str:
         d, is_today = days_until(date)
         entries.append((d if d is not None else 999, is_today, name, date, note))
     entries.sort(key=lambda x: x[0])
-    lines = ["🎂 <b>Дни рождения:</b>\n"]
+
+    lines = [f"🎂 <b>Дни рождения</b> ({len(entries)} чел.):\n"]
     for d, is_today, name, date, note in entries:
         display = format_date_display(date)
         age = get_age(date)
         zodiac = get_zodiac(date)
-        age_str = f", {age} лет" if age else ""
+        age_str    = f", {age} л." if age else ""
         zodiac_str = f" {ZODIAC_EMOJI.get(zodiac, '')}" if zodiac else ""
-        note_str = f" — <i>{note}</i>" if note else ""
+        note_str   = f"\n   📝 <i>{note}</i>" if note else ""
+
         if is_today:
-            lines.append(f"🎉 <b>{name}</b> — {display}{age_str}{zodiac_str} (СЕГОДНЯ!){note_str}")
+            lines.append(f"🎉 <b>{name}</b> — {display}{age_str}{zodiac_str}\n   ✨ <b>СЕГОДНЯ ДЕНЬ РОЖДЕНИЯ!</b>{note_str}")
         elif d == 1:
-            lines.append(f"🔥 <b>{name}</b> — {display}{age_str}{zodiac_str} (завтра!){note_str}")
+            lines.append(f"🔥 <b>{name}</b> — {display}{age_str}{zodiac_str}\n   ⏰ завтра!{note_str}")
+        elif d is not None and d <= 7:
+            lines.append(f"🎈 <b>{name}</b> — {display}{age_str}{zodiac_str}\n   📆 через {d} дн.{note_str}")
         elif d is not None:
-            lines.append(f"🎈 {name} — {display}{age_str}{zodiac_str} (через {d} дн.){note_str}")
+            lines.append(f"📅 {name} — {display}{age_str}{zodiac_str} (через {d} дн.){note_str}")
         else:
             lines.append(f"📅 {name} — {display}{zodiac_str}{note_str}")
-    return "\n".join(lines)
+    return "\n\n".join([lines[0]] + lines[1:])
 
 def is_spam(chat_id: int, user_id: int) -> bool:
     now = datetime.now().timestamp()
@@ -627,14 +662,18 @@ def get_weekly_fav(chat_id: int):
 
 @dp.message(F.new_chat_members)
 async def on_bot_added(message: types.Message):
+    """Приветствует группу при добавлении бота и уведомляет администратора."""
     try:
         bot_info = await bot.get_me()
         for member in message.new_chat_members:
             if member.id == bot_info.id:
-                chat = message.chat
+                chat  = message.chat
                 adder = message.from_user
-                adder_name = f"{adder.first_name or ''} {adder.last_name or ''}".strip()
+                adder_name     = f"{adder.first_name or ''} {adder.last_name or ''}".strip()
                 adder_username = f"@{adder.username}" if adder.username else "нет username"
+
+                logger.info(f"Бот добавлен в группу '{chat.title}' (id={chat.id}) пользователем {adder_name}")
+
                 await notify_admin(
                     f"🆕 <b>Бота добавили в новую группу!</b>\n"
                     f"─────────────────\n"
@@ -646,8 +685,11 @@ async def on_bot_added(message: types.Message):
                 )
                 await message.answer(
                     "👋 Привет! Меня зовут <b>Эльза Абдрахманова</b> 🎀\n\n"
-                    "Я слежу за днями рождения в этой группе и напоминаю каждую ночь 🌙\n\n"
-                    "Используй кнопки ниже! 🎂",
+                    "Я помогаю не забывать дни рождения в этой группе! 🎂\n\n"
+                    "🌙 Каждую ночь в 01:00 я присылаю список ближайших дней рождения.\n"
+                    "🎉 В день рождения — поздравляю с гифкой!\n"
+                    "⏰ За 7, 3 и 1 день — напоминаю заранее.\n\n"
+                    "Используй кнопки ниже, чтобы начать 👇",
                     reply_markup=MAIN_KB,
                 )
                 return
@@ -656,10 +698,18 @@ async def on_bot_added(message: types.Message):
 
 @dp.message(CommandStart())
 async def cmd_start(message: types.Message):
+    """Приветственное сообщение по команде /start."""
+    user_name = message.from_user.first_name or "друг"
     await message.answer(
-        "👋 Привет! Меня зовут <b>Эльза Абдрахманова</b> 🎀\n\n"
+        f"👋 Привет, <b>{user_name}</b>! Меня зовут <b>Эльза Абдрахманова</b> 🎀\n\n"
         "Я помогаю не забывать дни рождения! 🎂\n\n"
-        "Используй кнопки ниже:",
+        "Что я умею:\n"
+        "📅 Показывать список дней рождения\n"
+        "➕ Добавлять новые даты\n"
+        "❌ Удалять из списка\n"
+        "🌙 Напоминать каждую ночь в 01:00\n"
+        "🎉 Поздравлять в день рождения\n\n"
+        "Используй кнопки ниже 👇",
         reply_markup=MAIN_KB,
     )
 
@@ -720,14 +770,17 @@ async def btn_add(message: types.Message):
         return
     pending[message.chat.id] = "add"
     await message.answer(
-        "✏️ Напиши имя, дату, (необязательно) что подарить и заметку:\n\n"
-        "<b>Имя ДД.ММ</b>\n"
-        "<b>Имя ДД.ММ.ГГГГ</b>\n"
-        "<b>Имя ДД.ММ.ГГГГ подарок: духи</b>\n\n"
-        "Примеры:\n"
+        "✏️ <b>Добавление дня рождения</b>\n\n"
+        "Напиши в одном сообщении имя и дату:\n\n"
+        "📌 <b>Форматы:</b>\n"
+        "<code>Имя ДД.ММ</code>\n"
+        "<code>Имя ДД.ММ.ГГГГ</code>\n"
+        "<code>Имя ДД.ММ.ГГГГ подарок: что дарить</code>\n\n"
+        "📝 <b>Примеры:</b>\n"
         "<code>Эльза 05.03</code>\n"
         "<code>Эльза 05.03.2000</code>\n"
-        "<code>Эльза 05.03.2000 подарок: духи</code>",
+        "<code>Эльза 05.03.2000 подарок: духи</code>\n\n"
+        "💡 Год необязателен, но с ним я смогу посчитать возраст.",
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -736,9 +789,18 @@ async def btn_remove(message: types.Message):
     if is_spam(message.chat.id, message.from_user.id):
         await message.answer("не спамь дура, с первого раза поняла 🙄")
         return
+    cid = str(message.chat.id)
+    group = DATA.get(cid, {})
+    if not group:
+        await message.answer("📭 Список дней рождения пуст — удалять нечего.", reply_markup=MAIN_KB)
+        return
     pending[message.chat.id] = "remove"
+    names_list = "\n".join(f"• {n}" for n in sorted(group.keys()))
     await message.answer(
-        "✏️ Напиши имя человека которого нужно удалить:",
+        f"✏️ <b>Удаление из списка</b>\n\n"
+        f"Напиши имя человека, которого нужно удалить.\n\n"
+        f"📋 <b>Текущий список:</b>\n{names_list}\n\n"
+        f"💡 Регистр не важен — найду в любом случае.",
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -935,8 +997,14 @@ async def handle_text(message: types.Message):
         pending.pop(chat_id, None)
         parts = text.strip().split()
         if len(parts) < 2:
-            await message.answer("❌ Неверный формат.\nПример: <code>Эльза 05.03.2000</code>", reply_markup=MAIN_KB)
+            await message.answer(
+                "❌ Неверный формат. Нужно имя и дата в одном сообщении.\n\n"
+                "Пример: <code>Эльза 05.03.2000</code>",
+                reply_markup=MAIN_KB,
+            )
             return
+
+        # Ищем дату среди слов
         date_idx = None
         for i, p in enumerate(parts):
             if DATE_RE.match(p):
@@ -944,27 +1012,26 @@ async def handle_text(message: types.Message):
                 break
         if date_idx is None:
             await message.answer(
-                "❌ Не нашёл дату. Формат: <b>ДД.ММ</b> или <b>ДД.ММ.ГГГГ</b>",
+                "❌ Не нашёл дату в сообщении.\n\n"
+                "Формат даты: <b>ДД.ММ</b> или <b>ДД.ММ.ГГГГ</b>\n"
+                "Пример: <code>Эльза 05.03</code> или <code>Эльза 05.03.2000</code>",
                 reply_markup=MAIN_KB,
             )
             return
-        name = " ".join(parts[:date_idx]).strip()
-        date_str = parts[date_idx]
-        rest = " ".join(parts[date_idx+1:]).strip()
 
-        # Парсим подарок и заметку
-        gift = ""
-        note = rest
-        if "подарок:" in rest.lower():
-            gift_match = re.search(r"подарок:\s*(.+?)(?:\s+|$)", rest, re.IGNORECASE)
-            if gift_match:
-                gift = gift_match.group(1).strip()
-                note = rest[:gift_match.start()].strip() + " " + rest[gift_match.end():].strip()
-                note = note.strip()
+        name     = " ".join(parts[:date_idx]).strip()
+        date_str = parts[date_idx]
+        rest     = " ".join(parts[date_idx + 1:]).strip()
 
         if not name:
-            await message.answer("❌ Имя не может быть пустым.", reply_markup=MAIN_KB)
+            await message.answer(
+                "❌ Имя не может быть пустым.\n\n"
+                "Пример: <code>Эльза 05.03.2000</code>",
+                reply_markup=MAIN_KB,
+            )
             return
+
+        # Строгая проверка даты через strptime
         try:
             p = date_str.split('.')
             if len(p) == 3:
@@ -972,31 +1039,50 @@ async def handle_text(message: types.Message):
             else:
                 datetime.strptime(f"{date_str}.2000", "%d.%m.%Y")
         except ValueError:
-            await message.answer("❌ Неверная дата. Проверь день и месяц.", reply_markup=MAIN_KB)
+            await message.answer(
+                f"❌ Дата <b>{date_str}</b> не существует.\n\n"
+                "Проверь день и месяц — например, 30.02 не бывает.\n"
+                "Пример корректной даты: <code>05.03</code> или <code>05.03.2000</code>",
+                reply_markup=MAIN_KB,
+            )
             return
+
+        # Парсим подарок и заметку из остатка строки
+        gift = ""
+        note = rest
+        if "подарок:" in rest.lower():
+            gift_match = re.search(r"подарок:\s*(.+?)(?:\s+|$)", rest, re.IGNORECASE)
+            if gift_match:
+                gift = gift_match.group(1).strip()
+                note = (rest[:gift_match.start()].strip() + " " + rest[gift_match.end():].strip()).strip()
 
         cid = str(chat_id)
         if cid not in DATA:
             DATA[cid] = {}
+
+        # Предупреждаем если имя уже есть (перезапись)
+        is_update = name in DATA[cid]
         DATA[cid][name] = {"date": date_str, "note": note, "gift": gift}
         save_data()
+        logger.info(f"{'Обновлено' if is_update else 'Добавлено'} ДР: {name} {date_str} (chat={chat_id})")
 
         d, is_today = days_until(date_str)
-        display = format_date_display(date_str)
-        zodiac = get_zodiac(date_str)
+        display    = format_date_display(date_str)
+        zodiac     = get_zodiac(date_str)
         zodiac_str = f" {ZODIAC_EMOJI.get(zodiac, '')} {zodiac}" if zodiac else ""
-        note_str = f"\n📝 Заметка: {note}" if note else ""
-        gift_str = f"\n🎁 Подарок: {gift}" if gift else ""
+        note_str   = f"\n📝 Заметка: {note}" if note else ""
+        gift_str   = f"\n🎁 Подарок: {gift}" if gift else ""
+        update_str = " (обновлено)" if is_update else ""
 
         if is_today:
             await message.answer(
-                f"🎉 Сохранено и сегодня же ДР у <b>{name}</b>! 🎂{zodiac_str}{note_str}{gift_str}",
+                f"🎉 Сохранено{update_str}! И сегодня же ДР у <b>{name}</b>! 🎂{zodiac_str}{note_str}{gift_str}",
                 reply_markup=MAIN_KB,
             )
         else:
             suffix = f"через {d} дн." if d is not None else ""
             await message.answer(
-                f"✅ Добавлено: <b>{name}</b> — {display}{zodiac_str}"
+                f"✅ {'Обновлено' if is_update else 'Добавлено'}: <b>{name}</b> — {display}{zodiac_str}"
                 + (f" ({suffix})" if suffix else "")
                 + note_str + gift_str,
                 reply_markup=MAIN_KB,
@@ -1004,17 +1090,43 @@ async def handle_text(message: types.Message):
 
     elif state == "remove":
         pending.pop(chat_id, None)
-        name = text.strip()
-        cid = str(chat_id)
+        name_input = text.strip()
+        cid   = str(chat_id)
         group = DATA.get(cid, {})
-        if name in group:
-            del group[name]
+
+        # Точное совпадение
+        if name_input in group:
+            matched = name_input
+        else:
+            # Поиск без учёта регистра
+            matched = next(
+                (n for n in group if n.lower() == name_input.lower()),
+                None
+            )
+            # Частичное совпадение как запасной вариант
+            if matched is None:
+                candidates = [n for n in group if name_input.lower() in n.lower()]
+                if len(candidates) == 1:
+                    matched = candidates[0]
+
+        if matched:
+            del group[matched]
             DATA[cid] = group
             save_data()
-            await message.answer(f"✅ <b>{name}</b> удалён из списка.", reply_markup=MAIN_KB)
-        else:
+            logger.info(f"Удалено ДР: {matched} (chat={chat_id})")
             await message.answer(
-                f"❌ Имя <b>{name}</b> не найдено.\nПроверь написание (регистр важен).",
+                f"✅ <b>{matched}</b> удалён из списка дней рождения.",
+                reply_markup=MAIN_KB,
+            )
+        else:
+            # Подсказываем похожие имена
+            similar = [n for n in group if any(c in n.lower() for c in name_input.lower().split())]
+            hint = ""
+            if similar:
+                hint = "\n\n🔍 Похожие имена в списке:\n" + "\n".join(f"• {n}" for n in similar[:5])
+            await message.answer(
+                f"❌ Имя <b>{name_input}</b> не найдено в списке.{hint}\n\n"
+                f"Нажми ❌ Удалить ещё раз, чтобы увидеть полный список.",
                 reply_markup=MAIN_KB,
             )
 
@@ -1023,7 +1135,19 @@ async def handle_text(message: types.Message):
         date_str = text.strip()
         if not DATE_RE.match(date_str):
             await message.answer(
-                "❌ Неверный формат. Используй <b>ДД.ММ</b>\nПример: <code>05.03</code>",
+                "❌ Неверный формат даты.\n\n"
+                "Используй: <b>ДД.ММ</b> или <b>ДД.ММ.ГГГГ</b>\n"
+                "Пример: <code>05.03</code>",
+                reply_markup=MAIN_KB,
+            )
+            return
+        # Дополнительная проверка существования даты
+        try:
+            p = date_str.split('.')
+            datetime.strptime(f"{p[0]}.{p[1]}.2000", "%d.%m.%Y")
+        except ValueError:
+            await message.answer(
+                f"❌ Дата <b>{date_str}</b> не существует. Проверь день и месяц.",
                 reply_markup=MAIN_KB,
             )
             return
@@ -1031,11 +1155,15 @@ async def handle_text(message: types.Message):
         if zodiac:
             emoji = ZODIAC_EMOJI.get(zodiac, "🔮")
             await message.answer(
-                f"{emoji} <b>{zodiac}</b> — твой гороскоп на сегодня:\n\n{random.choice(HOROSCOPES)}",
+                f"{emoji} <b>{zodiac}</b> — твой гороскоп на сегодня:\n\n"
+                f"{random.choice(HOROSCOPES)}",
                 reply_markup=MAIN_KB,
             )
         else:
-            await message.answer("❌ Не удалось определить знак зодиака.", reply_markup=MAIN_KB)
+            await message.answer(
+                "❌ Не удалось определить знак зодиака по этой дате.",
+                reply_markup=MAIN_KB,
+            )
 
 # ─── Фоновые задачи ───────────────────────────────────────────────────────────
 
@@ -1218,24 +1346,65 @@ async def reminder_loop():
             logger.error(f"reminder_loop error: {e}")
             await asyncio.sleep(60)
 
-# ─── Flask healthcheck ────────────────────────────────────────────────────────
+# ─── Flask keep-alive сервер ──────────────────────────────────────────────────
 flask_app = Flask(__name__)
+
+# Время старта для uptime-метрики
+_start_time = time.time()
 
 @flask_app.route("/")
 def health():
-    return "OK", 200
+    """Healthcheck endpoint — возвращает статус и uptime бота."""
+    uptime_sec = int(time.time() - _start_time)
+    hours, rem = divmod(uptime_sec, 3600)
+    mins, secs  = divmod(rem, 60)
+    return (
+        f"✅ Эльза Абдрахманова работает\n"
+        f"⏱ Uptime: {hours}h {mins}m {secs}s\n"
+        f"📊 Групп в базе: {len(DATA)}"
+    ), 200
+
+@flask_app.route("/ping")
+def ping():
+    """Простой ping для внешних мониторингов."""
+    return "pong", 200
 
 def run_flask():
+    """Запускает Flask в отдельном потоке."""
     port = int(os.getenv("PORT", 5000))
+    logger.info(f"🌐 Flask keep-alive запущен на порту {port}")
+    # Отключаем werkzeug-логи чтобы не засорять вывод
+    import logging as _logging
+    _logging.getLogger("werkzeug").setLevel(_logging.ERROR)
     flask_app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 async def main():
-    logger.info("🚀 Эльза Абдрахманова запускается...")
-    bot_info = await bot.get_me()
-    logger.info(f"✅ Бот запущен: @{bot_info.username}")
+    """Точка входа: запускает Flask, фоновый цикл и polling бота."""
+    logger.info("🚀 Запуск Эльзы Абдрахмановой...")
+
+    try:
+        bot_info = await bot.get_me()
+        logger.info(f"✅ Бот авторизован: @{bot_info.username} (id={bot_info.id})")
+    except Exception as e:
+        logger.critical(f"Не удалось авторизоваться в Telegram: {e}")
+        sys.exit(1)
+
+    # Запускаем фоновый цикл напоминаний
     asyncio.create_task(reminder_loop())
+    logger.info("⏰ Фоновый цикл напоминаний запущен")
+
+    logger.info("📡 Начинаем polling...")
     await dp.start_polling(bot, drop_pending_updates=True)
 
 if __name__ == "__main__":
-    threading.Thread(target=run_flask, daemon=True).start()
-    asyncio.run(main())
+    # Flask keep-alive в отдельном daemon-потоке
+    flask_thread = threading.Thread(target=run_flask, daemon=True, name="flask-keepalive")
+    flask_thread.start()
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("🛑 Бот остановлен вручную")
+    except Exception as e:
+        logger.critical(f"Критическая ошибка: {e}")
+        sys.exit(1)
