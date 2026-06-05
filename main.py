@@ -66,10 +66,8 @@ MAIN_KB = ReplyKeyboardMarkup(
     persistent=True,
 )
 
-# ДД.ММ или ДД.ММ.ГГГГ, опционально заметка после
 DATE_RE = re.compile(r"^\d{2}\.\d{2}(\.\d{4})?$")
 
-# Гифки для поздравления
 BIRTHDAY_GIFS = [
     "https://media.giphy.com/media/g5R9dok94mrIvplmZd/giphy.gif",
     "https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif",
@@ -78,7 +76,6 @@ BIRTHDAY_GIFS = [
     "https://media.giphy.com/media/l0HlBO7eyXzSZkJri/giphy.gif",
 ]
 
-# Случайные поздравления
 CONGRATS = [
     "Пусть этот день будет самым ярким в году! 🌟",
     "Желаем море улыбок и океан счастья! 🌊😊",
@@ -89,7 +86,48 @@ CONGRATS = [
     "Пусть жизнь будет сладкой как торт! 🎂",
 ]
 
-# Гороскопы по знакам зодиака
+# Ежедневные фразы
+DAILY_PHRASES = [
+    "Доброе утро, красотки! 💅 Эльза уже здесь, можно расслабиться ✨",
+    "Всем привет! Сегодня хороший день чтобы быть собой 💖",
+    "Девочки, не забываем — мы лучшие 👑 Хорошего дня!",
+    "Просыпайтесь, красавицы! Жизнь слишком короткая для плохого настроения 🌸",
+    "Всем энергии и кофе побольше ☕💫",
+    "Напоминаю что вы все классные. Это всё, это важно 💕",
+    "Хорошего дня, мои хорошие! 🌺 Эльза следит чтобы никто не грустил",
+    "Сегодня отличный день! Особенно если помнить про дни рождения 🎂",
+    "Привет всем! Улыбаемся и машем 😄✨",
+    "Доброго дня, группа! Кто сегодня именинник? 🎉",
+]
+
+# Ответы с характером когда говорят "Эльза"
+ELZA_REPLIES = [
+    "Да, это я 💅 Чего хотела?",
+    "Слушаю 👀 Только быстро, я занята",
+    "Эльза здесь 👑 Говори",
+    "Ну что такое? 🙄",
+    "Звала? 😏",
+    "Да да, я тут 💁‍♀️",
+    "Чего надо? 😒",
+    "О, наконец-то вспомнили про меня 💅",
+]
+
+# Ответы на мат
+MAT_REPLIES = [
+    "Полегче с выражениями, дорогая 💅",
+    "Ой, какие мы воспитанные... нет 🙄",
+    "Я всё слышу между прочим 👀",
+    "Мама не учила так разговаривать? 🤨",
+    "Красиво говоришь, ничего не скажешь 😏",
+    "Я запомню это 💅",
+    "Серьёзно? Это всё на что ты способна? 😒",
+    "Фу, некрасиво 🙅‍♀️",
+]
+
+MAT_WORDS = ["блять", "бля", "хуй", "хуя", "хуе", "пизд", "ёбан", "еблан",
+             "залупа", "сука", "ёб", "еб", "мудак", "пидор", "нахуй", "нахер",
+             "ёпт", "нахрен"]
+
 ZODIAC = {
     "Козерог":   ((12, 22), (1, 19)),
     "Водолей":   ((1, 20), (2, 18)),
@@ -124,7 +162,15 @@ HOROSCOPES = [
     "Звёзды советуют немного отдохнуть и набраться сил. 😴",
 ]
 
-def get_zodiac(date_str: str) -> str | None:
+def has_mat(text: str) -> bool:
+    t = text.lower()
+    return any(w in t for w in MAT_WORDS)
+
+def mentions_elza(text: str) -> bool:
+    t = text.lower()
+    return "эльза" in t or "elza" in t
+
+def get_zodiac(date_str: str):
     try:
         parts = date_str.split('.')
         day, month = int(parts[0]), int(parts[1])
@@ -151,7 +197,7 @@ def days_until(date_str: str):
     except Exception:
         return None, False
 
-def get_age(date_str: str) -> int | None:
+def get_age(date_str: str):
     try:
         parts = date_str.split('.')
         if len(parts) == 3:
@@ -282,34 +328,26 @@ async def btn_horoscope(message: types.Message):
         await message.answer("не спамь дура, с первого раза поняла 🙄")
         return
     pending.pop(message.chat.id, None)
-
-    # Ищем дату рождения этого пользователя в группе
     group = DATA.get(str(message.chat.id), {})
     user_name = message.from_user.first_name or ""
     found_date = None
     found_name = None
-
     for name, info in group.items():
         date = info.get("date") if isinstance(info, dict) else info
-        # Ищем совпадение по имени (нечувствительно к регистру)
         if user_name.lower() in name.lower() or name.lower() in user_name.lower():
             found_date = date
             found_name = name
             break
-
     if found_date:
         zodiac = get_zodiac(found_date)
         if zodiac:
-            horoscope = random.choice(HOROSCOPES)
             emoji = ZODIAC_EMOJI.get(zodiac, "🔮")
             await message.answer(
                 f"{emoji} <b>{zodiac}</b> — гороскоп для {found_name} на сегодня:\n\n"
-                f"{horoscope}",
+                f"{random.choice(HOROSCOPES)}",
                 reply_markup=MAIN_KB,
             )
             return
-
-    # Если не нашли — просим написать дату
     pending[message.chat.id] = "horoscope"
     await message.answer(
         "🔮 Напиши свою дату рождения чтобы узнать гороскоп:\n\n"
@@ -357,26 +395,33 @@ async def btn_about(message: types.Message):
 @dp.message(F.text)
 async def handle_text(message: types.Message):
     chat_id = message.chat.id
+    text = message.text or ""
     state = pending.get(chat_id)
+
+    # Мат — отвечаем всегда, state не сбрасываем
+    if has_mat(text):
+        await message.reply(random.choice(MAT_REPLIES))
+        return
+
+    # Упоминание Эльзы — только если нет активного состояния
+    if state is None and mentions_elza(text):
+        await message.reply(random.choice(ELZA_REPLIES))
+        return
 
     if state == "add":
         pending.pop(chat_id, None)
-        # Парсим: имя дата [заметка]
-        parts = message.text.strip().split()
+        parts = text.strip().split()
         if len(parts) < 2:
             await message.answer(
                 "❌ Неверный формат.\nПример: <code>Эльза 05.03.2000 духи</code>",
                 reply_markup=MAIN_KB,
             )
             return
-
-        # Ищем дату среди слов
         date_idx = None
         for i, p in enumerate(parts):
             if DATE_RE.match(p):
                 date_idx = i
                 break
-
         if date_idx is None:
             await message.answer(
                 "❌ Не нашёл дату. Формат: <b>ДД.ММ</b> или <b>ДД.ММ.ГГГГ</b>\n"
@@ -384,15 +429,12 @@ async def handle_text(message: types.Message):
                 reply_markup=MAIN_KB,
             )
             return
-
         name = " ".join(parts[:date_idx]).strip()
         date_str = parts[date_idx]
         note = " ".join(parts[date_idx+1:]).strip()
-
         if not name:
             await message.answer("❌ Имя не может быть пустым.", reply_markup=MAIN_KB)
             return
-
         try:
             p = date_str.split('.')
             if len(p) == 3:
@@ -402,19 +444,16 @@ async def handle_text(message: types.Message):
         except ValueError:
             await message.answer("❌ Неверная дата. Проверь день и месяц.", reply_markup=MAIN_KB)
             return
-
         cid = str(chat_id)
         if cid not in DATA:
             DATA[cid] = {}
         DATA[cid][name] = {"date": date_str, "note": note}
         save_data()
-
         d, is_today = days_until(date_str)
         display = format_date_display(date_str)
         zodiac = get_zodiac(date_str)
         zodiac_str = f" {ZODIAC_EMOJI.get(zodiac, '')} {zodiac}" if zodiac else ""
         note_str = f"\n📝 Заметка: {note}" if note else ""
-
         if is_today:
             await message.answer(
                 f"🎉 Сохранено и сегодня же ДР у <b>{name}</b>! 🎂{zodiac_str}{note_str}",
@@ -431,7 +470,7 @@ async def handle_text(message: types.Message):
 
     elif state == "remove":
         pending.pop(chat_id, None)
-        name = message.text.strip()
+        name = text.strip()
         cid = str(chat_id)
         group = DATA.get(cid, {})
         if name in group:
@@ -447,7 +486,7 @@ async def handle_text(message: types.Message):
 
     elif state == "horoscope":
         pending.pop(chat_id, None)
-        date_str = message.text.strip()
+        date_str = text.strip()
         if not DATE_RE.match(date_str):
             await message.answer(
                 "❌ Неверный формат. Используй <b>ДД.ММ</b>\nПример: <code>05.03</code>",
@@ -456,22 +495,26 @@ async def handle_text(message: types.Message):
             return
         zodiac = get_zodiac(date_str)
         if zodiac:
-            horoscope = random.choice(HOROSCOPES)
             emoji = ZODIAC_EMOJI.get(zodiac, "🔮")
             await message.answer(
-                f"{emoji} <b>{zodiac}</b> — твой гороскоп на сегодня:\n\n{horoscope}",
+                f"{emoji} <b>{zodiac}</b> — твой гороскоп на сегодня:\n\n{random.choice(HOROSCOPES)}",
                 reply_markup=MAIN_KB,
             )
         else:
             await message.answer("❌ Не удалось определить знак зодиака.", reply_markup=MAIN_KB)
 
     else:
-        await message.answer("Используй кнопки ниже 👇", reply_markup=MAIN_KB)
+        pass  # Молчим если не наше
 
-# ─── Напоминание и поздравления ───────────────────────────────────────────────
+# ─── Фоновые задачи ───────────────────────────────────────────────────────────
 async def reminder_loop():
     congratulated: set = set()
     reminded: set = set()
+    daily_said: set = set()
+    daily_hour = random.randint(8, 21)
+    daily_minute = random.randint(0, 59)
+    logger.info(f"Ежедневная фраза сегодня в {daily_hour:02d}:{daily_minute:02d}")
+
     while True:
         try:
             now = datetime.now()
@@ -480,18 +523,21 @@ async def reminder_loop():
             # В 00:00 — поздравления с гифкой
             if now.hour == 0 and now.minute == 0 and day_key not in congratulated:
                 congratulated = {day_key}
+                # Новое случайное время для фразы на следующий день
+                daily_hour = random.randint(8, 21)
+                daily_minute = random.randint(0, 59)
+                logger.info(f"Завтрашняя фраза в {daily_hour:02d}:{daily_minute:02d}")
                 for chat_id, group in DATA.items():
                     for name, info in group.items():
                         date = info.get("date") if isinstance(info, dict) else info
                         _, is_today = days_until(date)
                         if is_today:
                             try:
-                                congrats = random.choice(CONGRATS)
                                 gif_url = random.choice(BIRTHDAY_GIFS)
                                 await bot.send_animation(
                                     int(chat_id),
                                     animation=gif_url,
-                                    caption=f"🎉🎂 <b>С ДНЕМ РОЖДЕНИЯ, {name}!</b> 🎂🎉\n\n{congrats}"
+                                    caption=f"🎉🎂 <b>С ДНЕМ РОЖДЕНИЯ, {name}!</b> 🎂🎉\n\n{random.choice(CONGRATS)}"
                                 )
                             except Exception as e:
                                 logger.error(f"Ошибка поздравления {chat_id}: {e}")
@@ -518,6 +564,18 @@ async def reminder_loop():
                         )
                     except Exception as e:
                         logger.error(f"Ошибка напоминания {chat_id}: {e}")
+                await asyncio.sleep(61)
+                continue
+
+            # Случайное время — ежедневная фраза
+            if now.hour == daily_hour and now.minute == daily_minute and day_key not in daily_said:
+                daily_said = {day_key}
+                phrase = random.choice(DAILY_PHRASES)
+                for chat_id in DATA.keys():
+                    try:
+                        await bot.send_message(int(chat_id), phrase)
+                    except Exception as e:
+                        logger.error(f"Ошибка ежедневной фразы {chat_id}: {e}")
                 await asyncio.sleep(61)
                 continue
 
